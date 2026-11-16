@@ -749,6 +749,24 @@ export default function App() {
   const [viewingQuestion, setViewingQuestion] = useState<Question | null>(null);
   const [showQuestionModal, setShowQuestionModal] = useState(false);
 
+  // --- STATE SOAL MANUAL (FASE BARU) ---
+  const [manualQuestionList, setManualQuestionList] = useState<Question[]>([]);
+  const [currentManualQuestion, setCurrentManualQuestion] = useState<QuestionFormData>({
+    id: null,
+    jenjang: 'SMP',
+    kelas: 'Kelas 7',
+    materi: 'Aljabar',
+    submateri: '',
+    difficulty: 'Sedang',
+    type: 'Pilihan Ganda',
+    question: '',
+    options: ['', '', '', ''],
+    correctAnswer: '',
+    explanation: '',
+    source: 'manual'
+  });
+  const [showManualQuestionModal, setShowManualQuestionModal] = useState(false);
+
   // --- STATE AI GENERATOR (KHUSUS ADMIN AISYABELLA) ---
   const [aiForm, setAiForm] = useState<AIGeneratorForm>({
     jenjang: 'SMP',
@@ -796,6 +814,19 @@ export default function App() {
   // --- STATE FILTER RIWAYAT SISWA & COPY SNIPPET ---
   const [historyFilterJenjang, setHistoryFilterJenjang] = useState('Semua');
   const [copiedKey, setCopiedKey] = useState('');
+
+  // --- STATE HAPUS RIWAYAT LATIHAN ---
+  const [attemptToDelete, setAttemptToDelete] = useState<Attempt | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // --- STATE SAVING MANUAL QUESTIONS ---
+  const [isSavingManualQuestions, setIsSavingManualQuestions] = useState(false);
+
+  // --- STATE HAPUS AKUN SISWA (TAHAP 4C) ---
+  const [studentToDelete, setStudentToDelete] = useState<UserType | null>(null);
+  const [showDeleteStudentConfirm, setShowDeleteStudentConfirm] = useState(false);
+  const [isDeletingStudent, setIsDeletingStudent] = useState(false);
 
   // ============================================================================
   // HELPER COLLECTION PATHS (STRICT RULE 1: /artifacts/{appId}/public/data/...)
@@ -1169,23 +1200,6 @@ export default function App() {
   // HANDLER CRUD BANK SOAL FIRESTORE (KHUSUS ADMIN)
   // ============================================================================
 
-  const openNewQuestionModal = () => {
-    setEditingQuestion({
-      id: null,
-      jenjang: 'SMP',
-      kelas: 'Kelas 7',
-      materi: 'Aljabar',
-      submateri: '',
-      difficulty: 'Sedang',
-      type: 'Pilihan Ganda',
-      question: '',
-      options: ['', '', '', ''],
-      correctAnswer: '',
-      explanation: '',
-      source: 'Input Manual Admin'
-    });
-    setShowQuestionModal(true);
-  };
 
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1243,6 +1257,234 @@ export default function App() {
       showToast('Soal berhasil dihapus dari Firestore.');
     } catch {
       showToast('Gagal menghapus soal.', 'error');
+    }
+  };
+
+  // ============================================================================
+  // HANDLER SOAL MANUAL (FASE BARU - TAHAP 2)
+  // ============================================================================
+
+  const openManualQuestionForm = () => {
+    setCurrentManualQuestion({
+      id: null,
+      jenjang: 'SMP',
+      kelas: 'Kelas 7',
+      materi: 'Aljabar',
+      submateri: '',
+      difficulty: 'Sedang',
+      type: 'Pilihan Ganda',
+      question: '',
+      options: ['', '', '', ''],
+      correctAnswer: '',
+      explanation: '',
+      source: 'manual'
+    });
+    setShowManualQuestionModal(true);
+  };
+
+  const updateManualQuestionField = (field: keyof QuestionFormData, value: any) => {
+    setCurrentManualQuestion((prev) => {
+      if (field === 'type') {
+        const type = value as string;
+        const options = type === 'Isian Singkat' ? [] : type === 'Benar atau Salah' ? ['Benar', 'Salah'] : ['', '', '', ''];
+        return { ...prev, [field]: value, options };
+      }
+      return { ...prev, [field]: value };
+    });
+  };
+
+  const addManualQuestionToTempList = () => {
+    if (
+      !currentManualQuestion.question.trim() ||
+      !currentManualQuestion.correctAnswer.trim() ||
+      !currentManualQuestion.explanation.trim()
+    ) {
+      showToast('Pertanyaan, kunci jawaban, dan pembahasan wajib diisi!', 'error');
+      return;
+    }
+
+    if (
+      currentManualQuestion.type !== 'Isian Singkat' &&
+      currentManualQuestion.type !== 'Benar atau Salah' &&
+      currentManualQuestion.options.some((opt) => !opt.trim())
+    ) {
+      showToast('Semua pilihan jawaban wajib diisi!', 'error');
+      return;
+    }
+
+    const newQuestion: Question = {
+      ...currentManualQuestion,
+      id: `TEMP-${Date.now()}`,
+      createdAt: new Date().toISOString()
+    };
+    
+    setManualQuestionList((prev) => [...prev, newQuestion]);
+    setCurrentManualQuestion({
+      id: null,
+      jenjang: 'SMP',
+      kelas: 'Kelas 7',
+      materi: 'Aljabar',
+      submateri: '',
+      difficulty: 'Sedang',
+      type: 'Pilihan Ganda',
+      question: '',
+      options: ['', '', '', ''],
+      correctAnswer: '',
+      explanation: '',
+      source: 'manual'
+    });
+    setShowManualQuestionModal(false);
+    showToast('Soal ditambahkan ke daftar sementara!');
+  };
+
+  const removeManualQuestion = (tempId: string) => {
+    setManualQuestionList((prev) => prev.filter((q) => q.id !== tempId));
+  };
+
+  const saveManualQuestionsToFirestore = async () => {
+    if (manualQuestionList.length === 0) {
+      showToast('Tidak ada soal untuk disimpan!', 'error');
+      return;
+    }
+
+    setIsSavingManualQuestions(true);
+    try {
+      for (const q of manualQuestionList) {
+        await addDoc(getColRef('questionBank'), {
+          jenjang: q.jenjang,
+          kelas: q.kelas,
+          materi: q.materi,
+          submateri: q.submateri || q.materi,
+          difficulty: q.difficulty,
+          type: q.type,
+          question: q.question.trim(),
+          options: q.options,
+          correctAnswer: q.correctAnswer.trim(),
+          explanation: q.explanation.trim(),
+          source: 'manual',
+          createdBy: currentUser?.name || 'Admin',
+          createdAt: new Date().toISOString(),
+          serverCreatedAt: serverTimestamp()
+        });
+      }
+      const savedCount = manualQuestionList.length;
+      setManualQuestionList([]);
+      setCurrentManualQuestion({
+        id: null,
+        jenjang: 'SMP',
+        kelas: 'Kelas 7',
+        materi: 'Aljabar',
+        submateri: '',
+        difficulty: 'Sedang',
+        type: 'Pilihan Ganda',
+        question: '',
+        options: ['', '', '', ''],
+        correctAnswer: '',
+        explanation: '',
+        source: 'manual'
+      });
+      setShowManualQuestionModal(false);
+      const message = savedCount === 1 
+        ? 'Berhasil! 1 soal manual telah disimpan ke Bank Soal.' 
+        : `Berhasil! ${savedCount} soal manual telah disimpan ke Bank Soal.`;
+      showToast(message);
+    } catch (error) {
+      showToast('Gagal menyimpan soal manual ke Firestore.', 'error');
+    } finally {
+      setIsSavingManualQuestions(false);
+    }
+  };
+
+  // ============================================================================
+  // HANDLER HAPUS AKUN SISWA (TAHAP 4C - FRONTEND INTEGRATION)
+  // ============================================================================
+
+  const handleDeleteStudent = async () => {
+    if (!studentToDelete || !currentUser) return;
+
+    setIsDeletingStudent(true);
+    try {
+      // Get Firebase ID Token
+      const idToken = await getIdTokenResult(currentUser as any).then(result => result.token);
+
+      // Call backend API
+      const response = await fetch('/api/delete-student', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${idToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          studentUid: studentToDelete.uid,
+        }),
+      });
+
+      const data = (await response.json()) as {
+        success?: boolean;
+        message?: string;
+        error?: string;
+        code?: string;
+        deleted?: {
+          userDoc?: boolean;
+          attempts?: number;
+          activityLogs?: number;
+          authAccount?: boolean;
+        };
+      };
+
+      if (!response.ok) {
+        // Handle different error codes
+        if (data.code === 'PARTIAL_FAILURE' || data.code === 'PARTIAL_FAILURE_AUTH') {
+          const deletedInfo = data.deleted;
+          const deletedItems = [];
+          if (deletedInfo?.attempts) deletedItems.push(`${deletedInfo.attempts} riwayat latihan`);
+          if (deletedInfo?.activityLogs) deletedItems.push(`${deletedInfo.activityLogs} log aktivitas`);
+          if (deletedInfo?.userDoc) deletedItems.push('profil siswa');
+          if (deletedInfo?.authAccount) deletedItems.push('akun autentikasi');
+          
+          const warnMessage = `Sebagian penghapusan berhasil: ${deletedItems.join(', ')}. Sisa data mungkin masih ada di backend. Hubungi admin teknis.`;
+          showToast(warnMessage, 'error');
+        } else {
+          showToast(`Gagal menghapus akun siswa: ${data.error || response.statusText}`, 'error');
+        }
+        return;
+      }
+
+      // Success only if response is 200 and success flag is true
+      if (data.success) {
+        // Remove student from local state
+        setUsersList((prev) => prev.filter((u) => u.uid !== studentToDelete.uid));
+        showToast(`Akun siswa ${studentToDelete.name} berhasil dihapus.`);
+        setStudentToDelete(null);
+        setShowDeleteStudentConfirm(false);
+      } else {
+        showToast(`Gagal menghapus akun siswa: ${data.message || 'Response tidak valid'}`, 'error');
+      }
+    } catch (error) {
+      console.error('Error deleting student:', error);
+      showToast('Gagal menghapus akun siswa. Periksa koneksi internet.', 'error');
+    } finally {
+      setIsDeletingStudent(false);
+    }
+  };
+
+  // ============================================================================
+  // HANDLER HAPUS RIWAYAT LATIHAN (FASE BARU - TAHAP 3)
+  // ============================================================================
+
+  const handleDeleteAttempt = async () => {
+    if (!attemptToDelete || !currentUser) return;
+    
+    setIsDeleting(true);
+    try {
+      await deleteDoc(getDocRef('attempts', attemptToDelete.id));
+      showToast('Riwayat latihan berhasil dihapus dari Firestore!');
+      setAttemptToDelete(null);
+      setShowDeleteConfirm(false);
+    } catch {
+      showToast('Gagal menghapus riwayat latihan.', 'error');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -2428,13 +2670,58 @@ export default function App() {
                         <FileDown className="w-4 h-4" /> Download PDF
                       </button>
                       <button
-                        onClick={openNewQuestionModal}
+                        onClick={openManualQuestionForm}
                         className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-md flex items-center gap-2"
                       >
                         <Plus className="w-4 h-4" /> Tambah Soal Manual
                       </button>
                     </div>
                   </div>
+
+                  {/* LIST SOAL MANUAL (TEMPORARY) */}
+                  {manualQuestionList.length > 0 && (
+                    <div className="bg-white rounded-3xl p-5 border border-pink-100 shadow-sm space-y-3">
+                      <h3 className="font-extrabold text-slate-800 text-sm flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-pink-500" />
+                        Soal Sementara ({manualQuestionList.length})
+                      </h3>
+                      <div className="space-y-2">
+                        {manualQuestionList.map((q) => (
+                          <div key={q.id} className="p-3 rounded-xl bg-pink-50/50 border border-pink-100 flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-slate-800 text-sm line-clamp-2">{q.question}</p>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {q.jenjang} • {q.kelas} • {q.materi} • {q.difficulty}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => removeManualQuestion(q.id)}
+                              className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 font-bold text-xs hover:bg-rose-100"
+                            >
+                              Hapus
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex justify-end pt-2 border-t border-pink-50">
+                        <button
+                          onClick={saveManualQuestionsToFirestore}
+                          disabled={isSavingManualQuestions}
+                          className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold text-xs sm:text-sm shadow-md flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed hover:opacity-95 transition"
+                        >
+                          {isSavingManualQuestions ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" /> Menyimpan...
+                            </>
+                          ) : (
+                            <>
+                              <Check className="w-4 h-4" /> Simpan Semua ke Firestore
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="bg-white rounded-3xl p-5 border border-pink-100 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
                     <div className="lg:col-span-2 relative">
@@ -3009,6 +3296,7 @@ export default function App() {
                           <th className="p-4">Jenjang & Kelas</th>
                           <th className="p-4">Latihan Selesai</th>
                           <th className="p-4">Rata-rata Nilai</th>
+                          <th className="p-4 text-center">Aksi</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-pink-50 text-sm">
@@ -3034,6 +3322,18 @@ export default function App() {
                                 </td>
                                 <td className="p-4 font-semibold">{sAttempts.length} latihan</td>
                                 <td className="p-4 font-extrabold text-pink-600">{avg}</td>
+                                <td className="p-4 text-center">
+                                  <button
+                                    onClick={() => {
+                                      setStudentToDelete(s);
+                                      setShowDeleteStudentConfirm(true);
+                                    }}
+                                    className="p-2 rounded-lg text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition"
+                                    title="Hapus akun siswa"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </td>
                               </tr>
                             );
                           })}
@@ -3056,11 +3356,12 @@ export default function App() {
                           <th className="p-4">Jenjang</th>
                           <th className="p-4">Benar / Total</th>
                           <th className="p-4">Nilai Akhir</th>
+                          <th className="p-4 text-center">Aksi</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-pink-50 text-sm">
                         {attempts.map((a) => (
-                          <tr key={a.id}>
+                          <tr key={a.id} className="hover:bg-pink-50/30">
                             <td className="p-4 font-bold text-slate-800">
                               {a.studentName || a.userId}
                             </td>
@@ -3070,6 +3371,18 @@ export default function App() {
                               {a.correctCount} / {a.totalQuestions}
                             </td>
                             <td className="p-4 font-extrabold text-pink-600">{a.score}</td>
+                            <td className="p-4 text-center">
+                              <button
+                                onClick={() => {
+                                  setAttemptToDelete(a);
+                                  setShowDeleteConfirm(true);
+                                }}
+                                className="p-2 rounded-lg text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition"
+                                title="Hapus riwayat latihan"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -4081,6 +4394,297 @@ export default function App() {
             </form>
           </div>
         )}
+
+        {/* MODAL FORM SOAL MANUAL (TAHAP 2) */}
+        {showManualQuestionModal && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-pink-100 my-4">
+              <h2 className="text-2xl font-extrabold text-slate-800 mb-6">Buat Soal Manual</h2>
+
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                {/* Jenjang */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Jenjang</label>
+                  <select
+                    value={currentManualQuestion.jenjang}
+                    onChange={(e) => updateManualQuestionField('jenjang', e.target.value)}
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  >
+                    <option>SD</option>
+                    <option>SMP</option>
+                    <option>SMA</option>
+                  </select>
+                </div>
+
+                {/* Kelas */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Kelas</label>
+                  <select
+                    value={currentManualQuestion.kelas}
+                    onChange={(e) => updateManualQuestionField('kelas', e.target.value)}
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  >
+                    {currentManualQuestion.jenjang === 'SD' && (
+                      <>
+                        <option>Kelas 1</option>
+                        <option>Kelas 2</option>
+                        <option>Kelas 3</option>
+                        <option>Kelas 4</option>
+                        <option>Kelas 5</option>
+                        <option>Kelas 6</option>
+                      </>
+                    )}
+                    {currentManualQuestion.jenjang === 'SMP' && (
+                      <>
+                        <option>Kelas 7</option>
+                        <option>Kelas 8</option>
+                        <option>Kelas 9</option>
+                      </>
+                    )}
+                    {currentManualQuestion.jenjang === 'SMA' && (
+                      <>
+                        <option>Kelas 10</option>
+                        <option>Kelas 11</option>
+                        <option>Kelas 12</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+
+                {/* Materi */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Materi</label>
+                  <input
+                    type="text"
+                    value={currentManualQuestion.materi}
+                    onChange={(e) => updateManualQuestionField('materi', e.target.value)}
+                    placeholder="Contoh: Aljabar, Trigonometri"
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  />
+                </div>
+
+                {/* Tingkat Kesulitan */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Tingkat Kesulitan</label>
+                  <select
+                    value={currentManualQuestion.difficulty}
+                    onChange={(e) => updateManualQuestionField('difficulty', e.target.value)}
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  >
+                    <option>Mudah</option>
+                    <option>Sedang</option>
+                    <option>Sulit</option>
+                  </select>
+                </div>
+
+                {/* Tipe Soal */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Tipe Soal</label>
+                  <select
+                    value={currentManualQuestion.type}
+                    onChange={(e) => updateManualQuestionField('type', e.target.value)}
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  >
+                    <option>Pilihan Ganda</option>
+                    <option>Pilihan Ganda Kompleks</option>
+                    <option>Isian Singkat</option>
+                    <option>Benar atau Salah</option>
+                  </select>
+                </div>
+
+                {/* Pertanyaan */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Pertanyaan</label>
+                  <textarea
+                    value={currentManualQuestion.question}
+                    onChange={(e) => updateManualQuestionField('question', e.target.value)}
+                    placeholder="Masukkan pertanyaan..."
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 min-h-20"
+                  />
+                </div>
+
+                {/* Pilihan Jawaban (jika bukan Isian Singkat) */}
+                {currentManualQuestion.type !== 'Isian Singkat' && (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-bold text-slate-700">Pilihan Jawaban</label>
+                    {currentManualQuestion.options.map((opt, idx) => (
+                      <input
+                        key={idx}
+                        type="text"
+                        value={opt}
+                        onChange={(e) => {
+                          const newOpts = [...currentManualQuestion.options];
+                          newOpts[idx] = e.target.value;
+                          updateManualQuestionField('options', newOpts);
+                        }}
+                        placeholder={String.fromCharCode(65 + idx)}
+                        className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Kunci Jawaban */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Kunci Jawaban</label>
+                  <input
+                    type="text"
+                    value={currentManualQuestion.correctAnswer}
+                    onChange={(e) => updateManualQuestionField('correctAnswer', e.target.value)}
+                    placeholder="Contoh: A atau jawaban singkat"
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  />
+                </div>
+
+                {/* Pembahasan */}
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Pembahasan Langkah Demi Langkah</label>
+                  <textarea
+                    value={currentManualQuestion.explanation}
+                    onChange={(e) => updateManualQuestionField('explanation', e.target.value)}
+                    placeholder="Masukkan pembahasan langkah demi langkah..."
+                    className="w-full px-3 py-2 border border-pink-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 min-h-24"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowManualQuestionModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 font-bold text-sm text-slate-600 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={addManualQuestionToTempList}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 text-white font-bold text-sm shadow-md hover:opacity-95 transition"
+                >
+                  Tambah ke Daftar Sementara
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL KONFIRMASI HAPUS AKUN SISWA (TAHAP 4C) */}
+        {showDeleteStudentConfirm && studentToDelete && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-pink-100">
+              <h3 className="text-xl font-extrabold text-slate-800 mb-2">Hapus Akun Siswa?</h3>
+              <div className="space-y-3 mb-6">
+                <div className="p-3 rounded-xl bg-pink-50 text-sm">
+                  <p className="font-bold text-slate-800">Nama Siswa:</p>
+                  <p className="text-slate-600">{studentToDelete.name}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-purple-50 text-sm">
+                  <p className="font-bold text-slate-800">Email:</p>
+                  <p className="text-slate-600">{studentToDelete.email}</p>
+                </div>
+              </div>
+              <p className="text-xs text-rose-600 font-semibold mb-4">
+                ⚠️ Peringatan: Apakah Anda yakin ingin menghapus akun siswa ini? Seluruh data profil, riwayat latihan, dan aktivitas siswa akan dihapus secara permanen. Tindakan ini tidak dapat dibatalkan.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDeleteStudentConfirm(false);
+                    setStudentToDelete(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-sm text-slate-600 hover:bg-slate-50"
+                  disabled={isDeletingStudent}
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteStudent}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 text-white font-bold text-sm shadow-md hover:opacity-95 transition flex items-center justify-center gap-2 disabled:opacity-60"
+                  disabled={isDeletingStudent}
+                >
+                  {isDeletingStudent ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Menghapus...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      Hapus Permanen
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL KONFIRMASI HAPUS RIWAYAT LATIHAN (TAHAP 3) */}
+        {showDeleteConfirm && attemptToDelete && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-pink-100">
+              <h3 className="text-xl font-extrabold text-slate-800 mb-2">Hapus Riwayat Latihan?</h3>
+              <div className="space-y-3 mb-6">
+                <div className="p-3 rounded-xl bg-pink-50 text-sm">
+                  <p className="font-bold text-slate-800">Nama Siswa:</p>
+                  <p className="text-slate-600">{attemptToDelete.studentName || attemptToDelete.userId}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-purple-50 text-sm">
+                  <p className="font-bold text-slate-800">Paket Latihan:</p>
+                  <p className="text-slate-600">{attemptToDelete.exerciseTitle}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-emerald-50 text-sm">
+                  <p className="font-bold text-slate-800">Nilai Akhir:</p>
+                  <p className="text-slate-600">{attemptToDelete.score}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 text-sm">
+                  <p className="font-bold text-slate-800">Tanggal:</p>
+                  <p className="text-slate-600">
+                    {new Date(attemptToDelete.submittedAt).toLocaleDateString('id-ID')}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-rose-600 font-semibold mb-4">
+                ⚠️ Peringatan: Riwayat ini akan dihapus secara permanen dari Firestore. Tindakan ini tidak dapat dibatalkan.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    setAttemptToDelete(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-sm text-slate-600 hover:bg-slate-50"
+                  disabled={isDeleting}
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteAttempt}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 text-white font-bold text-sm shadow-md hover:opacity-95 transition flex items-center justify-center gap-2 disabled:opacity-60"
+                  disabled={isDeleting}
+                >
+                  {isDeleting ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Menghapus...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      Hapus Permanen
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         </main>
       </div>
     </AuthContext.Provider>
