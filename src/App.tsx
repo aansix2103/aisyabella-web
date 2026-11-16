@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo, createContext, useContext } from 'react';
+import { useState, useEffect, useMemo, createContext, useContext } from 'react';
 import { initializeApp } from 'firebase/app';
+import type { Auth } from 'firebase/auth';
 import {
   getAuth,
   signInWithEmailAndPassword,
@@ -19,7 +20,11 @@ import {
   updateDoc,
   deleteDoc,
   onSnapshot,
-  serverTimestamp
+  serverTimestamp,
+  Firestore,
+  CollectionReference,
+  DocumentReference,
+  QuerySnapshot
 } from 'firebase/firestore';
 import {
   BookOpen,
@@ -42,7 +47,6 @@ import {
   ChevronLeft,
   Flag,
   Play,
-  GraduationCap,
   ShieldAlert,
   Menu,
   X,
@@ -51,13 +55,13 @@ import {
   Lock,
   Mail,
   ArrowRight,
-  Printer,
   FileDown,
   Database,
+  Printer,
   ShieldCheck,
-  Terminal,
+  Check,
   Copy,
-  Check
+  Terminal
 } from 'lucide-react';
 import {
   LineChart,
@@ -70,6 +74,25 @@ import {
   Tooltip,
   ResponsiveContainer
 } from 'recharts';
+import type {
+  User as UserType,
+  AuthContextType,
+  Question,
+  QuestionFormData,
+  GeneratedQuestion,
+  Exercise,
+  ExerciseFormData,
+  Attempt,
+  ActivityLog,
+  Toast,
+  LoginForm,
+  RegisterForm,
+  AIGeneratorForm,
+  AdminStats,
+  StudentStats,
+  ProtectedRouteProps,
+  ExportPDFConfig
+} from './types';
 
 // ============================================================================
 // 0. INISIALISASI FIREBASE (PROYEK AI-GENERATOR-AISYABELLA)
@@ -90,26 +113,31 @@ const firebaseConfig = DEFAULT_FIREBASE_CONFIG;
 // Pertahankan appId Firestore aplikasi untuk path artifacts/aisyabella-tka-math/public/data/
 const appId = 'aisyabella-tka-math';
 
-let firebaseApp = null;
-let auth = null;
-let db = null;
+let firebaseApp: any = null;
+try {
+  firebaseApp = initializeApp(DEFAULT_FIREBASE_CONFIG, 'aisyabella-main-app');
+} catch {
+  try {
+    firebaseApp = initializeApp(DEFAULT_FIREBASE_CONFIG);
+  } catch {
+    firebaseApp = null;
+  }
+}
+let auth: Auth | null = null;
+let db: Firestore | null = null;
 let isFirebaseConfigured = false;
 
 try {
-  firebaseApp = initializeApp(firebaseConfig, 'aisyabella-main-app');
-  auth = getAuth(firebaseApp);
-  db = getFirestore(firebaseApp);
+  auth = getAuth(firebaseApp as any);
+  db = getFirestore(firebaseApp as any);
   isFirebaseConfigured = true;
-} catch (err) {
+} catch {
   try {
-    firebaseApp = initializeApp(firebaseConfig);
-    auth = getAuth(firebaseApp);
-    db = getFirestore(firebaseApp);
-    isFirebaseConfigured = true;
-  } catch (e) {
     auth = getAuth();
     db = getFirestore();
     isFirebaseConfigured = Boolean(auth && db);
+  } catch {
+    isFirebaseConfigured = false;
   }
 }
 
@@ -335,14 +363,17 @@ exports.submitAndGradeAttempt = onCall(async (request) => {
 // 3. AUTH CONTEXT & PROTECTED ROUTE (SESUAI ARSITEKTUR FIREBASE)
 // ============================================================================
 
-const AuthContext = createContext(null);
+const AuthContext = createContext<AuthContextType | null>(null);
 
-function useAuth() {
+function useAuth(): AuthContextType | null {
   return useContext(AuthContext);
 }
 
-function ProtectedRoute({ allowedRole, children, onUnauthorized }) {
-  const { currentUser, authLoading } = useAuth();
+function ProtectedRoute({ allowedRole, children, onUnauthorized }: ProtectedRouteProps) {
+  const auth = useAuth();
+  if (!auth) return null;
+  
+  const { currentUser, authLoading } = auth;
 
   if (authLoading) {
     return (
@@ -376,14 +407,14 @@ function ProtectedRoute({ allowedRole, children, onUnauthorized }) {
     );
   }
 
-  return children;
+  return <>{children}</>;
 }
 
 // ============================================================================
 // 4. HELPER ANALISIS BELAJAR, EXPORT PDF & AI GENERATOR
 // ============================================================================
 
-function getScoreCategory(score) {
+function getScoreCategory(score: number) {
   if (score >= 90) {
     return {
       label: 'Sangat Baik',
@@ -424,24 +455,24 @@ function getScoreCategory(score) {
   };
 }
 
-function exportQuestionsToPDF({ title, subtitle, questions, includeAnswers = false }) {
+function exportQuestionsToPDF({ title, subtitle, questions, includeAnswers = false }: ExportPDFConfig) {
   const printWindow = window.open('', '_blank', 'width=900,height=750');
   if (!printWindow) return false;
 
-  const esc = (str) =>
+  const esc = (str: string | undefined | null): string =>
     String(str || '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
 
   const questionHtml = questions
-    .map((q, idx) => {
+    .map((q: Question, idx: number) => {
       const optionsHtml =
         q.options && q.options.length > 0
           ? `<div style="margin-top:8px; display:grid; grid-template-columns:1fr 1fr; gap:6px;">
               ${q.options
                 .map(
-                  (opt, i) => `
+                  (opt: string, i: number) => `
                   <div style="padding:6px 10px; border:1px solid #fbcfe8; border-radius:6px; font-size:13px;">
                     <strong>${String.fromCharCode(65 + i)}.</strong> ${esc(opt)}
                   </div>`
@@ -514,7 +545,7 @@ function exportQuestionsToPDF({ title, subtitle, questions, includeAnswers = fal
   return true;
 }
 
-async function generateMathQuestionsWithAI(config) {
+async function generateMathQuestionsWithAI(config: AIGeneratorForm) {
   const { jenjang, kelas, materi, submateri, difficulty, count, type, abilityLevel } = config;
 
   const prompt = `Buatkan tepat ${count} soal Tes Kemampuan Akademik (TKA) Matematika dalam Bahasa Indonesia yang akurat secara matematis untuk siswa ${jenjang} ${kelas}.
@@ -568,7 +599,7 @@ Aturan WAJIB:
       if (rawText) {
         const parsed = JSON.parse(rawText);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((item, idx) => ({
+          return parsed.map((item: any, idx: number) => ({
             tempId: `AI-${Date.now()}-${idx + 1}`,
             jenjang,
             kelas,
@@ -588,21 +619,21 @@ Aturan WAJIB:
             correctAnswer: item.correctAnswer,
             explanation: item.explanation,
             source: 'AI Generator AisyaBella'
-          }));
+          } as GeneratedQuestion));
         }
       }
     }
-  } catch (err) {
+  } catch {
     // Fallback generator jika jaringan/API belum aktif
   }
 
-  const generated = [];
+  const generated: GeneratedQuestion[] = [];
   for (let i = 0; i < count; i++) {
     const numA = (i + 2) * (jenjang === 'SD' ? 3 : jenjang === 'SMP' ? 5 : 7);
     const numB = (i + 1) * (jenjang === 'SD' ? 2 : 4);
     let questionText = '';
     let correct = '';
-    let opts = [];
+    let opts: string[] = [];
     let expl = '';
 
     if (jenjang === 'SD') {
@@ -675,30 +706,28 @@ Aturan WAJIB:
 
 export default function App() {
   // --- STATE AUTH & PROFILE ---
-  const [firebaseAuthUser, setFirebaseAuthUser] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState<UserType | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [currentView, setCurrentView] = useState('login');
+  const [currentView, setCurrentView] = useState<string>('login');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // --- STATE REALTIME FIRESTORE COLLECTIONS ---
-  const [usersList, setUsersList] = useState([]);
-  const [questions, setQuestions] = useState([]);
-  const [exercises, setExercises] = useState([]);
-  const [attempts, setAttempts] = useState([]);
-  const [activityLogs, setActivityLogs] = useState([]);
-  const [dbLoading, setDbLoading] = useState(false);
+  const [usersList, setUsersList] = useState<UserType[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
 
   // --- STATE NOTIFIKASI TOAST ---
-  const [toast, setToast] = useState(null);
-  const showToast = (message, type = 'success') => {
+  const [toast, setToast] = useState<Toast | null>(null);
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 4000);
   };
 
   // --- STATE FORM AUTH ---
-  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
-  const [registerForm, setRegisterForm] = useState({
+  const [loginForm, setLoginForm] = useState<LoginForm>({ email: '', password: '' });
+  const [registerForm, setRegisterForm] = useState<RegisterForm>({
     name: '',
     email: '',
     password: '',
@@ -716,12 +745,12 @@ export default function App() {
   const [qFilterDifficulty, setQFilterDifficulty] = useState('Semua');
   const [qFilterType, setQFilterType] = useState('Semua');
   const [qPage, setQPage] = useState(1);
-  const [editingQuestion, setEditingQuestion] = useState(null);
-  const [viewingQuestion, setViewingQuestion] = useState(null);
+  const [editingQuestion, setEditingQuestion] = useState<QuestionFormData | null>(null);
+  const [viewingQuestion, setViewingQuestion] = useState<Question | null>(null);
   const [showQuestionModal, setShowQuestionModal] = useState(false);
 
   // --- STATE AI GENERATOR (KHUSUS ADMIN AISYABELLA) ---
-  const [aiForm, setAiForm] = useState({
+  const [aiForm, setAiForm] = useState<AIGeneratorForm>({
     jenjang: 'SMP',
     kelas: 'Kelas 7',
     materi: 'Aljabar',
@@ -732,14 +761,14 @@ export default function App() {
     abilityLevel: 'Menengah'
   });
   const [aiGenerating, setAiGenerating] = useState(false);
-  const [aiGeneratedQuestions, setAiGeneratedQuestions] = useState([]);
-  const [selectedAiIds, setSelectedAiIds] = useState([]);
-  const [editingAiQuestion, setEditingAiQuestion] = useState(null);
+  const [aiGeneratedQuestions, setAiGeneratedQuestions] = useState<GeneratedQuestion[]>([]);
+  const [selectedAiIds, setSelectedAiIds] = useState<string[]>([]);
+  const [editingAiQuestion, setEditingAiQuestion] = useState<GeneratedQuestion | null>(null);
 
   // --- STATE PAKET LATIHAN ADMIN ---
   const [showPackageModal, setShowPackageModal] = useState(false);
-  const [editingPackage, setEditingPackage] = useState(null);
-  const [packageForm, setPackageForm] = useState({
+  const [editingPackage, setEditingPackage] = useState<Exercise | null>(null);
+  const [packageForm, setPackageForm] = useState<ExerciseFormData>({
     title: '',
     description: '',
     jenjang: 'SMP',
@@ -752,17 +781,17 @@ export default function App() {
   });
 
   // --- STATE PENGERJAAN LATIHAN & TIMER SERVER ---
-  const [activeExercise, setActiveExercise] = useState(null);
-  const [activeQuestions, setActiveQuestions] = useState([]);
+  const [activeExercise, setActiveExercise] = useState<Exercise | null>(null);
+  const [activeQuestions, setActiveQuestions] = useState<Question[]>([]);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
-  const [userAnswers, setUserAnswers] = useState({});
-  const [flaggedQuestions, setFlaggedQuestions] = useState({});
+  const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
+  const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({});
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(0);
-  const [exerciseEndTimestamp, setExerciseEndTimestamp] = useState(null);
-  const [exerciseStartTimestamp, setExerciseStartTimestamp] = useState(null);
+  const [exerciseEndTimestamp, setExerciseEndTimestamp] = useState<number | null>(null);
+  const [exerciseStartTimestamp, setExerciseStartTimestamp] = useState<number | null>(null);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [latestAttemptResult, setLatestAttemptResult] = useState(null);
+  const [latestAttemptResult, setLatestAttemptResult] = useState<Attempt | null>(null);
 
   // --- STATE FILTER RIWAYAT SISWA & COPY SNIPPET ---
   const [historyFilterJenjang, setHistoryFilterJenjang] = useState('Semua');
@@ -771,10 +800,13 @@ export default function App() {
   // ============================================================================
   // HELPER COLLECTION PATHS (STRICT RULE 1: /artifacts/{appId}/public/data/...)
   // ============================================================================
-  const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
-  const getDocRef = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
+  const getColRef = (colName: string): CollectionReference => 
+    collection(db!, 'artifacts', appId, 'public', 'data', colName);
+  
+  const getDocRef = (colName: string, docId: string): DocumentReference => 
+    doc(db!, 'artifacts', appId, 'public', 'data', colName, docId);
 
-  const logActivityToFirestore = async (userId, activity, description) => {
+  const logActivityToFirestore = async (userId: string, activity: string, description: string) => {
     if (!isFirebaseConfigured || !db) return;
     try {
       await addDoc(getColRef('activityLogs'), {
@@ -784,7 +816,7 @@ export default function App() {
         createdAt: new Date().toISOString(),
         serverTs: serverTimestamp()
       });
-    } catch (e) {
+    } catch {
       // Abaikan error log non-kritikal
     }
   };
@@ -800,7 +832,6 @@ export default function App() {
 
     // Tidak menjalankan signInWithCustomToken milik sandbox Canvas agar tidak bentrok dengan proyek ai-generator-aisyabella
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      setFirebaseAuthUser(fbUser);
       if (!fbUser || fbUser.isAnonymous) {
         setCurrentUser(null);
         setAuthLoading(false);
@@ -814,9 +845,13 @@ export default function App() {
 
         const userSnap = await getDoc(getDocRef('users', fbUser.uid));
         if (userSnap.exists()) {
-          const docData = userSnap.data();
+          const docData = userSnap.data() as Partial<UserType>;
           const resolvedRole = isClaimAdmin ? 'admin' : (docData.role === 'admin' ? 'admin' : 'siswa');
-          const profile = { uid: fbUser.uid, ...docData, role: resolvedRole };
+          const profile: UserType = { 
+            uid: fbUser.uid, 
+            ...docData as Omit<UserType, 'uid'>,
+            role: resolvedRole 
+          };
           setCurrentUser(profile);
           if (currentView === 'login' || currentView === 'register') {
             setCurrentView(resolvedRole === 'admin' ? 'admin-dashboard' : 'student-dashboard');
@@ -824,10 +859,10 @@ export default function App() {
         } else {
           // Jika profil belum ada di Firestore, tentukan role HANYA berdasarkan Custom Claims (default: 'siswa')
           const resolvedRole = isClaimAdmin ? 'admin' : 'siswa';
-          const newProfile = {
+          const newProfile: UserType = {
             uid: fbUser.uid,
-            name: fbUser.displayName || (resolvedRole === 'admin' ? 'AisyaBella' : fbUser.email.split('@')[0]),
-            email: fbUser.email,
+            name: fbUser.displayName || (resolvedRole === 'admin' ? 'AisyaBella' : fbUser.email?.split('@')[0] || 'User'),
+            email: fbUser.email || '',
             role: resolvedRole,
             jenjang: resolvedRole === 'admin' ? 'Semua Jenjang' : 'SMP',
             kelas: resolvedRole === 'admin' ? 'Administrator' : 'Kelas 7',
@@ -838,7 +873,7 @@ export default function App() {
           setCurrentUser(newProfile);
           setCurrentView(resolvedRole === 'admin' ? 'admin-dashboard' : 'student-dashboard');
         }
-      } catch (err) {
+      } catch {
         showToast('Gagal memuat profil pengguna dari Firestore.', 'error');
       } finally {
         setAuthLoading(false);
@@ -854,46 +889,38 @@ export default function App() {
   useEffect(() => {
     if (!isFirebaseConfigured || !db || !currentUser) return;
 
-    setDbLoading(true);
-
     // 1. Listener Bank Soal
     const unsubQuestions = onSnapshot(
       getColRef('questionBank'),
-      (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      (snap: QuerySnapshot) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Question));
         list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
         setQuestions(list);
-        setDbLoading(false);
-      },
-      () => {
-        setDbLoading(false);
       }
     );
 
     // 2. Listener Paket Latihan
     const unsubExercises = onSnapshot(
       getColRef('exercises'),
-      (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      (snap: QuerySnapshot) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Exercise));
         list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
         setExercises(list);
-      },
-      () => {}
+      }
     );
 
     // 3. Listener Riwayat & Hasil Latihan (Difilter di memori sesuai RULE 2)
     const unsubAttempts = onSnapshot(
       getColRef('attempts'),
-      (snap) => {
-        const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      (snap: QuerySnapshot) => {
+        const all = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Attempt));
         all.sort((a, b) => (b.submittedAt || '').localeCompare(a.submittedAt || ''));
         if (currentUser.role === 'admin') {
           setAttempts(all);
         } else {
           setAttempts(all.filter((a) => a.userId === currentUser.uid));
         }
-      },
-      () => {}
+      }
     );
 
     // 4. Listener Daftar Siswa & Activity Logs (Khusus Admin)
@@ -902,20 +929,18 @@ export default function App() {
     if (currentUser.role === 'admin') {
       unsubUsers = onSnapshot(
         getColRef('users'),
-        (snap) => {
-          setUsersList(snap.docs.map((d) => ({ uid: d.id, ...d.data() })));
-        },
-        () => {}
+        (snap: QuerySnapshot) => {
+          setUsersList(snap.docs.map((d) => ({ uid: d.id, ...d.data() } as UserType)));
+        }
       );
 
       unsubLogs = onSnapshot(
         getColRef('activityLogs'),
-        (snap) => {
-          const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        (snap: QuerySnapshot) => {
+          const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ActivityLog));
           logs.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
           setActivityLogs(logs);
-        },
-        () => {}
+        }
       );
     }
 
@@ -931,7 +956,7 @@ export default function App() {
   // ============================================================================
   // NAVIGASI DENGAN PROTEKSI ROLE KETAT
   // ============================================================================
-  const navigateTo = (view) => {
+  const navigateTo = (view: string) => {
     const adminViews = [
       'admin-dashboard',
       'admin-bank-soal',
@@ -990,7 +1015,9 @@ export default function App() {
       const remaining = Math.max(0, Math.floor((exerciseEndTimestamp - Date.now()) / 1000));
       setTimeLeftSeconds(remaining);
       if (remaining <= 0) {
-        localStorage.removeItem(`active_attempt_${currentUser?.uid}`);
+        if (currentUser) {
+          localStorage.removeItem(`active_attempt_${currentUser.uid}`);
+        }
         handleFinalSubmitExercise(true);
       }
     };
@@ -998,7 +1025,7 @@ export default function App() {
     updateRemaining();
     const timer = setInterval(updateRemaining, 1000);
     return () => clearInterval(timer);
-  }, [currentView, activeExercise, exerciseEndTimestamp]);
+  }, [currentView, activeExercise, exerciseEndTimestamp, currentUser]);
 
   // Simpan progres jawaban sementara di cache lokal selama ujian berlangsung
   useEffect(() => {
@@ -1013,9 +1040,9 @@ export default function App() {
         })
       );
     }
-  }, [userAnswers, currentView, activeExercise, exerciseEndTimestamp]);
+  }, [userAnswers, currentView, activeExercise, exerciseEndTimestamp, currentUser]);
 
-  const formatTimer = (totalSec) => {
+  const formatTimer = (totalSec: number) => {
     const mins = Math.floor(totalSec / 60);
     const secs = totalSec % 60;
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
@@ -1025,7 +1052,7 @@ export default function App() {
   // HANDLER FIREBASE AUTHENTICATION (LOGIN, REGISTER, FORGOT, LOGOUT)
   // ============================================================================
 
-  const handleLoginSubmit = async (e) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isFirebaseConfigured || !auth) {
       showToast('Konfigurasi Firebase belum diisi. Silakan isi firebaseConfig terlebih dahulu.', 'error');
@@ -1045,12 +1072,12 @@ export default function App() {
         `${cred.user.email} berhasil login ke sistem.`
       );
       showToast('Login berhasil! Memuat dashboard...');
-    } catch (err) {
+    } catch (err: any) {
       let msg = 'Email atau password salah.';
-      if (err.code === 'auth/user-not-found') msg = 'Akun tidak ditemukan. Silakan daftar terlebih dahulu.';
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential')
+      if (err?.code === 'auth/user-not-found') msg = 'Akun tidak ditemukan. Silakan daftar terlebih dahulu.';
+      if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential')
         msg = 'Email atau password tidak sesuai.';
-      if (err.code === 'auth/too-many-requests')
+      if (err?.code === 'auth/too-many-requests')
         msg = 'Terlalu banyak percobaan login. Coba beberapa saat lagi.';
       showToast(msg, 'error');
     } finally {
@@ -1058,7 +1085,7 @@ export default function App() {
     }
   };
 
-  const handleRegisterSubmit = async (e) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isFirebaseConfigured || !auth || !db) {
       showToast('Konfigurasi Firebase belum diisi.', 'error');
@@ -1086,7 +1113,7 @@ export default function App() {
       );
 
       // KEAMANAN: Setiap registrasi publik OTOMATIS mendapatkan role 'siswa'
-      const studentDoc = {
+      const studentDoc: UserType = {
         uid: cred.user.uid,
         name: registerForm.name.trim(),
         email: registerForm.email.trim().toLowerCase(),
@@ -1094,8 +1121,7 @@ export default function App() {
         jenjang: registerForm.jenjang,
         kelas: registerForm.kelas,
         isActive: true,
-        createdAt: new Date().toISOString(),
-        serverCreatedAt: serverTimestamp()
+        createdAt: new Date().toISOString()
       };
 
       await setDoc(getDocRef('users', cred.user.uid), studentDoc);
@@ -1107,24 +1133,24 @@ export default function App() {
       setCurrentUser(studentDoc);
       setCurrentView('student-dashboard');
       showToast(`Selamat datang di AisyaBella, ${studentDoc.name}!`);
-    } catch (err) {
+    } catch (err: any) {
       let msg = 'Gagal membuat akun.';
-      if (err.code === 'auth/email-already-in-use') msg = 'Email sudah terdaftar. Silakan login.';
-      if (err.code === 'auth/weak-password') msg = 'Password terlalu lemah (minimal 6 karakter).';
+      if (err?.code === 'auth/email-already-in-use') msg = 'Email sudah terdaftar. Silakan login.';
+      if (err?.code === 'auth/weak-password') msg = 'Password terlalu lemah (minimal 6 karakter).';
       showToast(msg, 'error');
     } finally {
       setAuthSubmitting(false);
     }
   };
 
-  const handleForgotPasswordSubmit = async (e) => {
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isFirebaseConfigured || !auth) return;
     try {
       await sendPasswordResetEmail(auth, forgotEmail.trim());
       showToast(`Email reset password telah dikirim ke ${forgotEmail}`);
       setCurrentView('login');
-    } catch (err) {
+    } catch {
       showToast('Gagal mengirim email reset password. Pastikan email terdaftar.', 'error');
     }
   };
@@ -1161,10 +1187,10 @@ export default function App() {
     setShowQuestionModal(true);
   };
 
-  const handleSaveQuestion = async (e) => {
+  const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (currentUser?.role !== 'admin') return;
-    if (!editingQuestion.question.trim() || !editingQuestion.correctAnswer.trim()) {
+    if (!editingQuestion || !editingQuestion.question.trim() || !editingQuestion.correctAnswer.trim()) {
       showToast('Pertanyaan dan kunci jawaban wajib diisi!', 'error');
       return;
     }
@@ -1205,17 +1231,17 @@ export default function App() {
       );
       setShowQuestionModal(false);
       setEditingQuestion(null);
-    } catch (err) {
+    } catch {
       showToast('Gagal menyimpan soal ke Firestore. Periksa Security Rules.', 'error');
     }
   };
 
-  const handleDeleteQuestion = async (id) => {
+  const handleDeleteQuestion = async (id: string) => {
     if (currentUser?.role !== 'admin') return;
     try {
       await deleteDoc(getDocRef('questionBank', id));
       showToast('Soal berhasil dihapus dari Firestore.');
-    } catch (err) {
+    } catch {
       showToast('Gagal menghapus soal.', 'error');
     }
   };
@@ -1224,7 +1250,7 @@ export default function App() {
   // HANDLER AI GENERATOR SOAL (KHUSUS ADMIN AISYABELLA)
   // ============================================================================
 
-  const handleRunAiGenerator = async (e) => {
+  const handleRunAiGenerator = async (e: React.FormEvent) => {
     e.preventDefault();
     if (currentUser?.role !== 'admin') {
       showToast('Hanya Admin AisyaBella yang dapat mengakses AI Generator Soal.', 'error');
@@ -1240,7 +1266,7 @@ export default function App() {
       setAiGeneratedQuestions(results);
       setSelectedAiIds(results.map((r) => r.tempId));
       showToast(`AI berhasil membuat ${results.length} soal ${aiForm.jenjang} ${aiForm.kelas}!`);
-    } catch (err) {
+    } catch {
       showToast('Terjadi kendala saat menghasilkan soal AI.', 'error');
     } finally {
       setAiGenerating(false);
@@ -1272,7 +1298,7 @@ export default function App() {
         `Admin menyimpan ${chosen.length} soal hasil AI ke Bank Soal Firestore.`
       );
       showToast(`${chosen.length} soal AI berhasil disimpan ke Firestore!`);
-    } catch (err) {
+    } catch {
       showToast('Gagal menyimpan soal AI ke Firestore.', 'error');
     }
   };
@@ -1297,7 +1323,7 @@ export default function App() {
     setShowPackageModal(true);
   };
 
-  const openEditPackageModal = (pkg) => {
+  const openEditPackageModal = (pkg: Exercise) => {
     setEditingPackage(pkg);
     setPackageForm({
       title: pkg.title,
@@ -1313,7 +1339,7 @@ export default function App() {
     setShowPackageModal(true);
   };
 
-  const handleSavePackage = async (e) => {
+  const handleSavePackage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (currentUser?.role !== 'admin') return;
     if (!packageForm.title.trim() || packageForm.questionIds.length === 0) {
@@ -1343,7 +1369,7 @@ export default function App() {
         showToast('Paket latihan baru berhasil diterbitkan ke Firestore!');
       }
       setShowPackageModal(false);
-    } catch (err) {
+    } catch {
       showToast('Gagal menyimpan paket latihan ke Firestore.', 'error');
     }
   };
@@ -1352,10 +1378,10 @@ export default function App() {
   // HANDLER PENGERJAAN & PENILAIAN LATIHAN SISWA (TERSIMPAN KE FIRESTORE)
   // ============================================================================
 
-  const handleStartExercise = (exercise) => {
+  const handleStartExercise = (exercise: Exercise) => {
     const qList = (exercise.questionIds || [])
-      .map((id) => questions.find((q) => q.id === id))
-      .filter(Boolean);
+      .map((id: string) => questions.find((q) => q.id === id))
+      .filter((q): q is Question => Boolean(q));
 
     if (qList.length === 0) {
       showToast('Paket latihan ini belum memiliki butir soal aktif.', 'error');
@@ -1366,18 +1392,22 @@ export default function App() {
     const durationMs = (exercise.duration || 15) * 60 * 1000;
     let endTs = now + durationMs;
     let startTs = now;
-    let savedAnswers = {};
+    let savedAnswers: Record<string, string> = {};
 
     // Cek apakah siswa sempat me-refresh halaman saat ujian ini masih aktif
     try {
-      const cached = JSON.parse(localStorage.getItem(`active_attempt_${currentUser.uid}`) || 'null');
-      if (cached && cached.exerciseId === exercise.id && cached.endTimestamp > now) {
-        endTs = cached.endTimestamp;
-        startTs = cached.startTimestamp || now;
-        savedAnswers = cached.answers || {};
-        showToast('Melanjutkan sesi ujian yang sedang berjalan...');
+      if (currentUser) {
+        const cached = JSON.parse(localStorage.getItem(`active_attempt_${currentUser.uid}`) || 'null');
+        if (cached && cached.exerciseId === exercise.id && cached.endTimestamp > now) {
+          endTs = cached.endTimestamp;
+          startTs = cached.startTimestamp || now;
+          savedAnswers = cached.answers || {};
+          showToast('Melanjutkan sesi ujian yang sedang berjalan...');
+        }
       }
-    } catch (e) {}
+    } catch {
+      // Abaikan error parsing localStorage
+    }
 
     setActiveExercise(exercise);
     setActiveQuestions(qList);
@@ -1392,7 +1422,7 @@ export default function App() {
     setCurrentView('take-exercise');
   };
 
-  const handleFinalSubmitExercise = async (autoTimeout = false) => {
+  const handleFinalSubmitExercise = async (autoTimeout: boolean = false) => {
     if (isSubmitting || !activeExercise || !currentUser) return;
     setIsSubmitting(true);
     setShowSubmitConfirm(false);
@@ -1402,7 +1432,7 @@ export default function App() {
     let wrongCount = 0;
     let unansweredCount = 0;
 
-    activeQuestions.forEach((q) => {
+    activeQuestions.forEach((q: Question) => {
       const ans = (userAnswers[q.id] || '').trim();
       if (!ans) {
         unansweredCount++;
@@ -1417,7 +1447,7 @@ export default function App() {
     const score = Math.round((correctCount / total) * 100);
     const durationUsed = Math.max(1, Math.round((Date.now() - (exerciseStartTimestamp || Date.now())) / 1000));
 
-    const attemptPayload = {
+    const attemptPayload: Omit<Attempt, 'id'> = {
       userId: currentUser.uid,
       studentName: currentUser.name,
       exerciseId: activeExercise.id,
@@ -1439,7 +1469,7 @@ export default function App() {
 
     try {
       const docRef = await addDoc(getColRef('attempts'), attemptPayload);
-      setLatestAttemptResult({ id: docRef.id, ...attemptPayload });
+      setLatestAttemptResult({ id: docRef.id, ...attemptPayload } as Attempt);
       await logActivityToFirestore(
         currentUser.uid,
         'Selesai Latihan',
@@ -1450,8 +1480,8 @@ export default function App() {
           ? 'Waktu habis! Jawaban otomatis dikumpulkan & tersimpan di Firestore.'
           : 'Jawaban berhasil dikumpulkan & dinilai!'
       );
-    } catch (err) {
-      setLatestAttemptResult({ id: `LOCAL-${Date.now()}`, ...attemptPayload });
+    } catch {
+      setLatestAttemptResult({ id: `LOCAL-${Date.now()}`, ...attemptPayload } as Attempt);
       showToast('Hasil dinilai (gagal sinkronisasi ke Firestore, periksa aturan akses).', 'error');
     }
 
@@ -1464,7 +1494,7 @@ export default function App() {
   // STATISTIK REAL-TIME DARI DATA FIRESTORE
   // ============================================================================
 
-  const adminStats = useMemo(() => {
+  const adminStats = useMemo((): AdminStats => {
     const students = usersList.filter((u) => u.role === 'siswa');
     const avgScore =
       attempts.length > 0
@@ -1496,7 +1526,7 @@ export default function App() {
     };
   }, [usersList, questions, exercises, attempts]);
 
-  const studentStats = useMemo(() => {
+  const studentStats = useMemo((): StudentStats | null => {
     if (!currentUser || currentUser.role !== 'siswa') return null;
     const myAttempts = attempts.filter((a) => a.userId === currentUser.uid);
     const totalDone = myAttempts.length;
@@ -1516,10 +1546,11 @@ export default function App() {
         judul: a.exerciseTitle
       }));
 
-    const availableMateri = CURRICULUM[currentUser.jenjang]?.materi || [];
+    const curriculumData = CURRICULUM[(currentUser.jenjang as keyof typeof CURRICULUM)];
+    const availableMateri = curriculumData?.materi || [];
     const practicedMateri = new Set(myAttempts.map((a) => a.materi));
     const recommendedMateri = availableMateri
-      .filter((m) => !practicedMateri.has(m))
+      .filter((m: string) => !practicedMateri.has(m))
       .slice(0, 4);
 
     return {
@@ -1532,8 +1563,8 @@ export default function App() {
     };
   }, [currentUser, attempts]);
 
-  const filteredQuestions = useMemo(() => {
-    return questions.filter((q) => {
+  const filteredQuestions = useMemo((): Question[] => {
+    return questions.filter((q: Question) => {
       const matchSearch =
         (q.question || '').toLowerCase().includes(qSearch.toLowerCase()) ||
         (q.materi || '').toLowerCase().includes(qSearch.toLowerCase()) ||
@@ -1767,7 +1798,7 @@ export default function App() {
                     <select
                       value={registerForm.jenjang}
                       onChange={(e) => {
-                        const newJenjang = e.target.value;
+                        const newJenjang = e.target.value as keyof typeof CURRICULUM;
                         setRegisterForm({
                           ...registerForm,
                           jenjang: newJenjang,
@@ -1791,7 +1822,7 @@ export default function App() {
                       onChange={(e) => setRegisterForm({ ...registerForm, kelas: e.target.value })}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-pink-200 focus:ring-2 focus:ring-pink-400 outline-none text-sm bg-white font-semibold"
                     >
-                      {CURRICULUM[registerForm.jenjang].kelas.map((kls) => (
+                      {CURRICULUM[registerForm.jenjang as keyof typeof CURRICULUM].kelas.map((kls: string) => (
                         <option key={kls} value={kls}>
                           {kls}
                         </option>
@@ -2445,9 +2476,9 @@ export default function App() {
                     >
                       <option value="Semua">Semua Kelas</option>
                       {(qFilterJenjang !== 'Semua'
-                        ? CURRICULUM[qFilterJenjang].kelas
+                        ? CURRICULUM[qFilterJenjang as keyof typeof CURRICULUM].kelas
                         : [...CURRICULUM.SD.kelas, ...CURRICULUM.SMP.kelas, ...CURRICULUM.SMA.kelas]
-                      ).map((k) => (
+                      ).map((k: string) => (
                         <option key={k} value={k}>
                           {k}
                         </option>
@@ -2590,15 +2621,15 @@ export default function App() {
                         </label>
                         <select
                           value={aiForm.jenjang}
-                          onChange={(e) => {
-                            const j = e.target.value;
-                            setAiForm({
-                              ...aiForm,
-                              jenjang: j,
-                              kelas: CURRICULUM[j].kelas[0],
-                              materi: CURRICULUM[j].materi[0]
-                            });
-                          }}
+                           onChange={(e) => {
+                             const j = e.target.value as keyof typeof CURRICULUM;
+                             setAiForm({
+                               ...aiForm,
+                               jenjang: j,
+                               kelas: CURRICULUM[j].kelas[0],
+                               materi: CURRICULUM[j].materi[0]
+                             });
+                           }}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-pink-200 bg-white text-sm font-semibold"
                         >
                           <option value="SD">SD (Kelas 1 - 6)</option>
@@ -2616,7 +2647,7 @@ export default function App() {
                           onChange={(e) => setAiForm({ ...aiForm, kelas: e.target.value })}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-pink-200 bg-white text-sm font-semibold"
                         >
-                          {CURRICULUM[aiForm.jenjang].kelas.map((k) => (
+                           {CURRICULUM[aiForm.jenjang as keyof typeof CURRICULUM].kelas.map((k) => (
                             <option key={k} value={k}>
                               {k}
                             </option>
@@ -2633,7 +2664,7 @@ export default function App() {
                           onChange={(e) => setAiForm({ ...aiForm, materi: e.target.value })}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-pink-200 bg-white text-sm font-semibold"
                         >
-                          {CURRICULUM[aiForm.jenjang].materi.map((m) => (
+                           {CURRICULUM[aiForm.jenjang as keyof typeof CURRICULUM].materi.map((m) => (
                             <option key={m} value={m}>
                               {m}
                             </option>
@@ -2757,12 +2788,12 @@ export default function App() {
                         <div className="flex flex-wrap gap-2">
                           <button
                             onClick={() =>
-                              exportQuestionsToPDF({
-                                title: `Latihan Matematika ${aiForm.jenjang} ${aiForm.kelas}`,
-                                subtitle: `Materi: ${aiForm.materi} • Tingkat: ${aiForm.difficulty}`,
-                                questions: aiGeneratedQuestions,
-                                includeAnswers: false
-                              })
+                               exportQuestionsToPDF({
+                                 title: `Latihan Matematika ${aiForm.jenjang} ${aiForm.kelas}`,
+                                 subtitle: `Materi: ${aiForm.materi} • Tingkat: ${aiForm.difficulty}`,
+                                 questions: aiGeneratedQuestions as unknown as Question[],
+                                 includeAnswers: false
+                               })
                             }
                             className="px-3.5 py-2 rounded-xl border border-pink-200 text-pink-700 font-bold text-xs hover:bg-pink-50 flex items-center gap-1.5"
                           >
@@ -2770,12 +2801,12 @@ export default function App() {
                           </button>
                           <button
                             onClick={() =>
-                              exportQuestionsToPDF({
-                                title: `Soal & Pembahasan ${aiForm.jenjang} ${aiForm.kelas}`,
-                                subtitle: `Materi: ${aiForm.materi} • Tingkat: ${aiForm.difficulty}`,
-                                questions: aiGeneratedQuestions,
-                                includeAnswers: true
-                              })
+                                 exportQuestionsToPDF({
+                                   title: `Soal & Pembahasan ${aiForm.jenjang} ${aiForm.kelas}`,
+                                   subtitle: `Materi: ${aiForm.materi} • Tingkat: ${aiForm.difficulty}`,
+                                   questions: aiGeneratedQuestions as unknown as Question[],
+                                   includeAnswers: true
+                                 })
                             }
                             className="px-3.5 py-2 rounded-xl border border-purple-200 text-purple-700 font-bold text-xs hover:bg-purple-50 flex items-center gap-1.5"
                           >
@@ -2892,9 +2923,9 @@ export default function App() {
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {exercises.map((ex) => {
-                        const pkgQuestions = (ex.questionIds || [])
-                          .map((id) => questions.find((q) => q.id === id))
-                          .filter(Boolean);
+                         const pkgQuestions = (ex.questionIds || [])
+                           .map((id) => questions.find((q) => q.id === id))
+                           .filter((q): q is Question => Boolean(q));
                         return (
                           <div key={ex.id} className="bg-white rounded-3xl p-6 border border-pink-100 shadow-sm flex flex-col justify-between gap-4">
                             <div>
@@ -3287,9 +3318,9 @@ export default function App() {
                       {exercises
                         .filter((ex) => ex.status === 'published')
                         .map((ex) => {
-                          const pkgQuestions = (ex.questionIds || [])
-                            .map((id) => questions.find((q) => q.id === id))
-                            .filter(Boolean);
+                           const pkgQuestions = (ex.questionIds || [])
+                             .map((id) => questions.find((q) => q.id === id))
+                             .filter((q): q is Question => Boolean(q));
                           return (
                             <div
                               key={ex.id}
@@ -3584,18 +3615,18 @@ export default function App() {
                         <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
                           Jenjang
                         </label>
-                        <select
-                          value={currentUser.jenjang}
-                          onChange={(e) => {
-                            const j = e.target.value;
-                            setCurrentUser({
-                              ...currentUser,
-                              jenjang: j,
-                              kelas: CURRICULUM[j].kelas[0]
-                            });
-                          }}
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-pink-200 bg-white text-sm font-semibold"
-                        >
+                         <select
+                           value={currentUser.jenjang}
+                           onChange={(e) => {
+                             const j = e.target.value as keyof typeof CURRICULUM;
+                             setCurrentUser({
+                               ...currentUser,
+                               jenjang: j,
+                               kelas: CURRICULUM[j].kelas[0]
+                             });
+                           }}
+                           className="w-full px-3.5 py-2.5 rounded-xl border border-pink-200 bg-white text-sm font-semibold"
+                         >
                           <option value="SD">SD</option>
                           <option value="SMP">SMP</option>
                           <option value="SMA">SMA</option>
@@ -3610,7 +3641,7 @@ export default function App() {
                           onChange={(e) => setCurrentUser({ ...currentUser, kelas: e.target.value })}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-pink-200 bg-white text-sm font-semibold"
                         >
-                          {CURRICULUM[currentUser.jenjang]?.kelas.map((k) => (
+                           {CURRICULUM[currentUser.jenjang as keyof typeof CURRICULUM]?.kelas.map((k) => (
                             <option key={k} value={k}>
                               {k}
                             </option>
@@ -3630,7 +3661,6 @@ export default function App() {
               )}
             </ProtectedRoute>
           )}
-        </main>
 
         {/* ========================================================================
             MODALS (TAMBAH/EDIT SOAL, DETAIL SOAL, PAKET LATIHAN, EDIT AI)
@@ -3659,7 +3689,7 @@ export default function App() {
                   <select
                     value={editingQuestion.jenjang}
                     onChange={(e) => {
-                      const j = e.target.value;
+                      const j = e.target.value as keyof typeof CURRICULUM;
                       setEditingQuestion({
                         ...editingQuestion,
                         jenjang: j,
@@ -3684,7 +3714,7 @@ export default function App() {
                     }
                     className="w-full px-3 py-2 rounded-xl border border-pink-200 text-sm bg-white"
                   >
-                    {CURRICULUM[editingQuestion.jenjang].kelas.map((k) => (
+                     {CURRICULUM[editingQuestion.jenjang as keyof typeof CURRICULUM].kelas.map((k) => (
                       <option key={k} value={k}>
                         {k}
                       </option>
@@ -3701,7 +3731,7 @@ export default function App() {
                     }
                     className="w-full px-3 py-2 rounded-xl border border-pink-200 text-sm bg-white"
                   >
-                    {CURRICULUM[editingQuestion.jenjang].materi.map((m) => (
+                     {CURRICULUM[editingQuestion.jenjang as keyof typeof CURRICULUM].materi.map((m) => (
                       <option key={m} value={m}>
                         {m}
                       </option>
@@ -3937,7 +3967,7 @@ export default function App() {
                 <select
                   value={packageForm.jenjang}
                   onChange={(e) => {
-                    const j = e.target.value;
+                    const j = e.target.value as keyof typeof CURRICULUM;
                     setPackageForm({
                       ...packageForm,
                       jenjang: j,
@@ -3956,11 +3986,11 @@ export default function App() {
                   onChange={(e) => setPackageForm({ ...packageForm, kelas: e.target.value })}
                   className="px-3 py-2 rounded-xl border border-pink-200 text-sm bg-white"
                 >
-                  {CURRICULUM[packageForm.jenjang].kelas.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
+                   {CURRICULUM[packageForm.jenjang as keyof typeof CURRICULUM].kelas.map((k) => (
+                     <option key={k} value={k}>
+                       {k}
+                     </option>
+                   ))}
                 </select>
 
                 <input
@@ -3976,13 +4006,13 @@ export default function App() {
                 />
 
                 <select
-                  value={packageForm.status}
-                  onChange={(e) => setPackageForm({ ...packageForm, status: e.target.value })}
-                  className="px-3 py-2 rounded-xl border border-pink-200 text-sm bg-white"
-                >
-                  <option value="published">Published</option>
-                  <option value="draft">Draft</option>
-                </select>
+                   value={packageForm.status}
+                   onChange={(e) => setPackageForm({ ...packageForm, status: e.target.value as "published" | "draft" })}
+                   className="px-3 py-2 rounded-xl border border-pink-200 text-sm bg-white"
+                 >
+                   <option value="published">Published</option>
+                   <option value="draft">Draft</option>
+                 </select>
               </div>
 
               <div>
@@ -4046,11 +4076,12 @@ export default function App() {
                   className="px-5 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 text-white text-xs font-bold shadow-md"
                 >
                   Simpan Paket ke Firestore
-                </button>
+               </button>
               </div>
             </form>
           </div>
         )}
+        </main>
       </div>
     </AuthContext.Provider>
   );
