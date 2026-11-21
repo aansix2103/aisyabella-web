@@ -581,27 +581,25 @@ export default function App() {
 
   // State CP & Materi
   const [selectedElemen, setSelectedElemen] = useState([]);
-  const [topikMateri, setTopikMateri] = useState("Operasi Hitung Pecahan dan Desimal");
-  const [tujuanPembelajaran, setTujuanPembelajaran] = useState(
-    "Peserta didik mampu menyelesaikan masalah kontekstual yang berkaitan dengan operasi hitung pecahan, desimal, dan persen secara tepat."
-  );
+  const [topikMateri, setTopikMateri] = useState("");
+  const [tujuanPembelajaran, setTujuanPembelajaran] = useState("");
   const [dimensiProfil, setDimensiProfil] = useState(["Penalaran kritis", "Kemandirian"]);
 
   // State Komposisi & Konfigurasi Soal
   const [bentukSoal, setBentukSoal] = useState({
-    PG: 10,
-    PGK: 2,
+    PG: 0,
+    PGK: 0,
     BS: 0,
     Menjodohkan: 0,
-    Isian: 3,
-    Uraian: 2
+    Isian: 0,
+    Uraian: 0
   });
   const [opsiPG, setOpsiPG] = useState(4);
   const [gunakanStimulusLiterasi, setGunakanStimulusLiterasi] = useState(true);
   const [proporsiKesulitan, setProporsiKesulitan] = useState({
-    mudah: 30,
-    sedang: 50,
-    sulit: 20
+    mudah: 0,
+    sedang: 0,
+    sulit: 0
   });
   const [instruksiKhusus, setInstruksiKhusus] = useState("");
 
@@ -628,6 +626,28 @@ export default function App() {
   const notify = (type, text) => {
     setStatusMsg({ type, text });
   };
+
+  // localStorage Persistence: Load identitas on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('aisyabella_identitas');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setIdentitas(parsed);
+      }
+    } catch (e) {
+      // Silently fail if localStorage read fails
+    }
+  }, []);
+
+  // localStorage Persistence: Save identitas on change
+  useEffect(() => {
+    try {
+      localStorage.setItem('aisyabella_identitas', JSON.stringify(identitas));
+    } catch (e) {
+      // Silently fail if localStorage write fails
+    }
+  }, [identitas]);
 
   useEffect(() => {
     if (!availableMapel.includes(identitas.mapel)) {
@@ -1642,7 +1662,6 @@ Kembalikan HANYA array JSON valid (tanpa markdown \`\`\`json, tanpa teks pembuka
                     type="text"
                     value={topikMateri}
                     onChange={(e) => setTopikMateri(e.target.value)}
-                    placeholder="Contoh: Perubahan Wujud Zat, Pecahan Senilai, Teks Eksplanasi..."
                     className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
@@ -1655,40 +1674,10 @@ Kembalikan HANYA array JSON valid (tanpa markdown \`\`\`json, tanpa teks pembuka
                     rows={3}
                     value={tujuanPembelajaran}
                     onChange={(e) => setTujuanPembelajaran(e.target.value)}
-                    placeholder="Tuliskan rumusan Tujuan Pembelajaran yang akan diturunkan menjadi indikator soal..."
                     className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-2">
-                    Dimensi Profil Lulusan yang Diintegrasikan
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {DIMENSI.map((dim) => {
-                      const active = dimensiProfil.includes(dim);
-                      return (
-                        <button
-                          type="button"
-                          key={dim}
-                          onClick={() =>
-                            setDimensiProfil((prev) =>
-                              prev.includes(dim) ? prev.filter((x) => x !== dim) : [...prev, dim]
-                            )
-                          }
-                          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-                            active
-                              ? "bg-indigo-600 text-white border-indigo-600"
-                              : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
-                          }`}
-                        >
-                          {active ? "✓ " : "+ "}
-                          {dim}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
 
               <div className="flex justify-between pt-4 border-t border-slate-100">
@@ -1860,7 +1849,6 @@ Kembalikan HANYA array JSON valid (tanpa markdown \`\`\`json, tanpa teks pembuka
                   type="text"
                   value={instruksiKhusus}
                   onChange={(e) => setInstruksiKhusus(e.target.value)}
-                  placeholder="Contoh: Gunakan konteks kearifan lokal Indonesia, hindari soal hafalan semata..."
                   className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm"
                 />
               </div>
